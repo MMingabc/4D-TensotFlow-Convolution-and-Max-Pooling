@@ -1,0 +1,102 @@
+
+import tensorflow as tf
+import numpy as np
+
+def weight_variable(shape,mean,stddev):
+  with tf.name_scope('weights'):
+    initial = tf.truncated_normal(shape=shape,mean=mean,stddev=stddev)
+    weights = tf.get_variable('weights',initializer=initial)
+  return weights
+def bias_variable(shape,mean,stddev):
+  with tf.name_scope('biases'):
+    initial = tf.truncated_normal(shape=shape,mean=mean,stddev=stddev)
+    biases  = tf.get_variable('biases',initializer=initial)
+  return biases
+
+def conv3d(x,W):
+  return tf.nn.conv3d(x,W,strides=[1,1,1,1,1],padding='SAME')
+  
+def conv3d_layer(x,x_depth=32,ksize=[5,5,5],knum=32,layername='Conv3d_n',act=tf.nn.relu,reuse=False):
+  with tf.name_scope(layername):
+    with tf.variable_scope(layername,reuse=reuse):
+      W = weight_variable(np.concatenate([ksize,np.stack([x_depth,knum])],0), mean=0.,stddev=0.1)
+      b = bias_variable([knum],mean=0.1,stddev=0.001)
+      print(b)
+    with tf.name_scope('convolution'):
+      conv_output = conv3d(x,W)+b
+    with tf.name_scope('acivation'):
+      act_output = act(conv_output,name='conv3d_out')
+    return act_output
+  
+def conv4d_layer(x,N=16,x_depth=4,ksize=[5,5,5,5],knum=8,batch_size=10,layername='Conv4d_n',act=tf.nn.relu):
+  with tf.variable_scope(layername):
+    length = ksize[3]
+    for i in range(length):
+      if i==0: 
+        x_padded = x
+        addup = tf.zeros((batch_size,N,N,N,N,knum))
+      else:
+        padding = tf.zeros((batch_size,N,N,N,i,x_depth))
+        x_padded = tf.concat((x,padding),axis=4)
+        
+      for j in range(N):
+        ksize_3d = ksize[0:3]
+        x_slice = tf.reshape(tf.slice(x_padded,[0,0,0,0,j+i,0],[batch_size,N,N,N,1,x_depth]),(batch_size,N,N,N,x_depth))
+        conv_3d = conv3d_layer(x_slice,x_depth=x_depth,ksize=ksize_3d,knum=knum,
+                               layername='Conv3d_'+str(i),act=tf.nn.relu,reuse=tf.AUTO_REUSE)
+        if j==0:
+          stack = tf.reshape(conv_3d,(batch_size,N,N,N,1,knum))
+        else:
+          stack = tf.concat((stack,tf.reshape(conv_3d,(batch_size,N,N,N,1,knum))),axis=4)      
+      addup += stack
+    return addup
+
+N = 16
+batch_size = 10
+x = tf.placeholder(tf.float32,(batch_size,N,N,N,N,5))
+
+## you can share parameters between different layers by giving them the same name.
+y = conv4d_layer(x,N,x_depth=5,ksize=[5,5,5,5],knum=8,batch_size=10,layername='Conv4d_1',act=tf.nn.relu)
+y_1 = conv4d_layer(x,N,x_depth=5,ksize=[5,5,5,5],knum=8,batch_size=10,layername='Conv4d_1',act=tf.nn.relu)
+
+def max_pool4D_1Ch(x,N):
+  with tf.name_scope('1Ch_Pooling'):
+    t = tf.reshape(x,(-1,N,N,N,N))
+    t_3d_pooled = tf.nn.max_pool3d(t,ksize=[1,2,2,2,1],strides=[1,2,2,2,1],padding='SAME')
+    t_reshaped = tf.reshape(t_3d_pooled,(-1,int(N/2),int(N/2),int(N/2),int(N/2),2))
+    t_pooled = tf.reduce_max(t_reshaped,axis=5)
+    return tf.reshape(t_pooled,(-1,int(N/2),int(N/2),int(N/2),int(N/2),1))
+
+def max_pool4D_8ch(x,N):
+  with tf.name_scope('8Ch_Pooling'):
+    x0,x1,x2,x3,x4,x5,x6,x7 = tf.split(x,[1,1,1,1,1,1,1,1],5)
+    x0_p = max_pool4D_1Ch(x0,N)
+    x1_p = max_pool4D_1Ch(x1,N)
+    x2_p = max_pool4D_1Ch(x2,N)
+    x3_p = max_pool4D_1Ch(x3,N)
+    x4_p = max_pool4D_1Ch(x4,N)
+    x5_p = max_pool4D_1Ch(x5,N)
+    x6_p = max_pool4D_1Ch(x6,N)
+    x7_p = max_pool4D_1Ch(x7,N)
+    return tf.concat((x0_p,x1_p,x2_p,x3_p,x4_p,x5_p,x6_p,x7_p),axis=5)
+  
+def max_pool4D_16ch(x,N):
+  with tf.name_scope('16Ch_Pooling'):
+    x0,x1 = tf.split(x,[8,8],5)
+    x0_p = max_pool4D_8ch(x0,N)
+    x1_p = max_pool4D_8ch(x1,N)
+    return tf.concat((x0_p,x1_p),axis=5)
+  
+def max_pool4D_32ch(x,N):
+  with tf.name_scope('32Ch_Pooling'):
+    x0,x1 = tf.split(x,[16,16],5)
+    x0_p = max_pool4D_16ch(x0,N)
+    x1_p = max_pool4D_16ch(x1,N)
+    return tf.concat((x0_p,x1_p),axis=5)
+  
+def max_pool4D_64ch(x,N):
+  with tf.name_scope('64Ch_Pooling'):
+    x0,x1 = tf.split(x,[32,32],5)
+    x0_p = max_pool4D_32ch(x0,N)
+    x1_p = max_pool4D_32ch(x1,N)
+    return tf.concat((x0_p,x1_p),axis=5)
